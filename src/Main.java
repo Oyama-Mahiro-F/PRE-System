@@ -15,9 +15,9 @@ public class Main {
 
     public static void main(String[] args) {
         System.out.println("╔══════════════════════════════════════════════════════════════╗");
-        System.out.println("║  基于代理重加密的数据安全管理算法实现                       ║");
-        System.out.println("║  北京邮电大学 信息安全编程技术与实例开发 课程设计          ║");
-        System.out.println("║  RSA-PRE (BBS98) & ECC-PRE (ECDH) 方案对比                  ║");
+        System.out.println("║  基于代理重加密的数据安全管理算法实现                        ║");
+        System.out.println("║  北京邮电大学 信息安全编程技术与实例开发 课程设计            ║");
+        System.out.println("║  RSA-PRE (BBS98) & ECC-PRE (ECDH) 方案对比                   ║");
         System.out.println("╚══════════════════════════════════════════════════════════════╝");
 
         DataSharingDemo demo = new DataSharingDemo();
