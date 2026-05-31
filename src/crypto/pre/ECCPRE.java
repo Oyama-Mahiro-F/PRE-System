@@ -8,7 +8,6 @@ import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.*;
-import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
 
 /**
@@ -37,18 +36,22 @@ public class ECCPRE implements PREInterface {
     public String getAlgorithmName() { return "ECC-PRE (ECDH-based Key Encapsulation)"; }
 
     /**
-     * 生成重加密密钥。
-     * Alice 解密自己的 wrapped key，然后用 Bob 的公钥重新封装。
-     * 返回的 reEncryptionKey 是 Bob 的 wrapped key。
+     * 生成重加密密钥（不适用于 ECC-PRE）。
      *
-     * 格式: wrappedKeyForBob (ECIES 密文)
+     * ECC-PRE 的重加密密钥生成需要原始密文上下文（提取临时公钥 R 和解封会话密钥），
+     * 因此无法仅凭 (alicePrivateKey, bobPublicKey) 完成。
+     * 请使用 {@link #precomputeReEncryptionKey(EncryptedMessage, byte[], byte[])}
+     * 该方法需要 Alice 持有原始密文以完成解封→重新封装的两阶段操作。
+     *
+     * @throws UnsupportedOperationException 始终抛出，引导调用方使用正确方法
      */
     @Override
     public byte[] generateReEncryptionKey(byte[] alicePrivateKey, byte[] bobPublicKey) {
-        // 重加密密钥本质上是: 使用 Bob 公钥封装的会话密钥
-        // 需要结合具体的加密上下文，实际在 reEncrypt 时根据原始密文动态生成
-        // 这里返回 bobPublicKey 作为标识，实际重加密逻辑在 reEncrypt 中
-        return bobPublicKey;
+        throw new UnsupportedOperationException(
+            "ECC-PRE 不支持无密文上下文的重加密密钥生成。"
+                + "请使用 precomputeReEncryptionKey(ciphertext, alicePrivateKey, bobPublicKey)。"
+                + "原因: ECC-PRE 方案需要从原始密文中提取临时公钥 R 并执行 ECDH 解封，"
+                + "仅凭 (sk_A, pk_B) 无法完成此操作。");
     }
 
     @Override
@@ -84,11 +87,11 @@ public class ECCPRE implements PREInterface {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] wrappingKey = md.digest(sharedSecret);
 
-            // AES-wrap the session key (use first 16 bytes of KDF output for AES-128)
+            // AESWrap the session key (RFC 3394, first 16 bytes of KDF output as KEK)
             byte[] wrapKey128 = java.util.Arrays.copyOf(wrappingKey, 16);
-            Cipher wrapCipher = Cipher.getInstance("AES/ECB/NoPadding");
-            wrapCipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(wrapKey128, "AES"));
-            byte[] wrappedKey = wrapCipher.doFinal(aesKey.getEncoded());
+            Cipher wrapCipher = Cipher.getInstance("AESWrap");
+            wrapCipher.init(Cipher.WRAP_MODE, new SecretKeySpec(wrapKey128, "AES"));
+            byte[] wrappedKey = wrapCipher.wrap(aesKey);
 
             // 密文格式:
             // primary = R_len(4) || R_encoded || iv || encryptedData
@@ -165,12 +168,11 @@ public class ECCPRE implements PREInterface {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] unwrappingKey = md.digest(sharedSecret);
 
-            // AES-unwrap
+            // AES-unwrap (RFC 3394)
             byte[] unwrapKey128 = java.util.Arrays.copyOf(unwrappingKey, 16);
-            Cipher unwrapCipher = Cipher.getInstance("AES/ECB/NoPadding");
-            unwrapCipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(unwrapKey128, "AES"));
-            byte[] aesKeyBytes = unwrapCipher.doFinal(wrappedKey);
-            SecretKey aesKey = new SecretKeySpec(aesKeyBytes, "AES");
+            Cipher unwrapCipher = Cipher.getInstance("AESWrap");
+            unwrapCipher.init(Cipher.UNWRAP_MODE, new SecretKeySpec(unwrapKey128, "AES"));
+            SecretKey aesKey = (SecretKey) unwrapCipher.unwrap(wrappedKey, "AES", Cipher.SECRET_KEY);
 
             // AES-GCM 解密数据
             Cipher aesCipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -210,12 +212,11 @@ public class ECCPRE implements PREInterface {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] unwrappingKey = md.digest(sharedSecret);
 
-            // 解封 AES key
+            // 解封 AES key (RFC 3394 AESWrap)
             byte[] unwrapKey128 = java.util.Arrays.copyOf(unwrappingKey, 16);
-            Cipher unwrapCipher = Cipher.getInstance("AES/ECB/NoPadding");
-            unwrapCipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(unwrapKey128, "AES"));
-            byte[] aesKeyBytes = unwrapCipher.doFinal(aliceWrappedKey);
-            SecretKey aesKey = new SecretKeySpec(aesKeyBytes, "AES");
+            Cipher unwrapCipher = Cipher.getInstance("AESWrap");
+            unwrapCipher.init(Cipher.UNWRAP_MODE, new SecretKeySpec(unwrapKey128, "AES"));
+            SecretKey aesKey = (SecretKey) unwrapCipher.unwrap(aliceWrappedKey, "AES", Cipher.SECRET_KEY);
 
             // --- 用 Bob 的公钥重新封装 ---
             KeyPairGenerator kpg2 = KeyPairGenerator.getInstance("EC");
@@ -230,9 +231,9 @@ public class ECCPRE implements PREInterface {
             byte[] wrappingKey2 = md.digest(sharedSecret2);
 
             byte[] wrapKey2_128 = java.util.Arrays.copyOf(wrappingKey2, 16);
-            Cipher wrapCipher2 = Cipher.getInstance("AES/ECB/NoPadding");
-            wrapCipher2.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(wrapKey2_128, "AES"));
-            byte[] bobWrappedKey = wrapCipher2.doFinal(aesKeyBytes);
+            Cipher wrapCipher2 = Cipher.getInstance("AESWrap");
+            wrapCipher2.init(Cipher.WRAP_MODE, new SecretKeySpec(wrapKey2_128, "AES"));
+            byte[] bobWrappedKey = wrapCipher2.wrap(aesKey);
 
             // 返回: R2_len(4) || R2_encoded || bobWrappedKey
             byte[] r2Encoded = ephemeralKP2.getPublic().getEncoded();

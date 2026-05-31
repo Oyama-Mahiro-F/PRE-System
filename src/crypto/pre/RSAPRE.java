@@ -23,6 +23,14 @@ import java.util.Arrays;
  * - AES-GCM 加密数据
  * - RSA 加密 AES 密钥
  * - 重加密仅对 RSA 加密的密钥部分进行变换
+ *
+ * ⚠ 安全注意 — 共享模数的固有风险:
+ * 由于 Alice 持有 φ(N)，且 Bob 的公钥指数 e_B 是公开的，Alice 可以计算
+ * d_B = e_B^{-1} mod φ(N)，从而获得 Bob 的完整私钥。反之亦然。
+ * 因此，本方案在实际部署中需满足以下前提之一：
+ * (1) 由可信密钥管理中心 (KMC) 统一生成并分发所有密钥对，用户不接触 φ(N)
+ * (2) 用户间存在充分的互信关系
+ * 对于互不信任的多方场景，应优先选择 ECC-PRE 方案（密钥完全独立）。
  */
 public class RSAPRE implements PREInterface {
 
